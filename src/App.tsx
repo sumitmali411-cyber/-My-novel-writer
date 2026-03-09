@@ -29,6 +29,8 @@ import {
   Upload,
   Sun,
   Moon,
+  Cloud,
+  HardDrive,
   Loader2
 } from 'lucide-react';
 import * as mammoth from 'mammoth';
@@ -143,20 +145,16 @@ export default function App() {
     setStories(stories.map(s => s.id === id ? { ...s, ...updates } : s));
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const processFileContent = async (file: File | Blob, fileName: string) => {
     setIsLoading(true);
-    setLoadingMessage(`Parsing ${file.name}...`);
+    setLoadingMessage(`Parsing ${fileName}...`);
 
-    const fileName = file.name;
     const extension = fileName.split('.').pop()?.toLowerCase();
     let content = '';
 
     try {
       if (extension === 'txt') {
-        content = await file.text();
+        content = await (file instanceof File ? file.text() : new Response(file).text());
       } else if (extension === 'docx') {
         const arrayBuffer = await file.arrayBuffer();
         const result = await mammoth.extractRawText({ arrayBuffer });
@@ -199,7 +197,119 @@ export default function App() {
       console.error('Error parsing file:', error);
       setIsLoading(false);
       alert('Error parsing file. Please try again.');
+    } finally {
+      setLoadingMessage('');
     }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processFileContent(file, file.name);
+  };
+
+  const handleGoogleDrive = () => {
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    const apiKey = import.meta.env.VITE_GOOGLE_API_KEY;
+
+    if (!clientId || !apiKey) {
+      alert('Google Drive integration is not configured. Please add VITE_GOOGLE_CLIENT_ID and VITE_GOOGLE_API_KEY to your environment.');
+      return;
+    }
+
+    // Load Google API
+    const script = document.createElement('script');
+    script.src = 'https://apis.google.com/js/api.js';
+    script.onload = () => {
+      (window as any).gapi.load('auth2', () => {
+        (window as any).gapi.auth2.authorize({
+          client_id: clientId,
+          scope: 'https://www.googleapis.com/auth/drive.readonly',
+        }, (authResponse: any) => {
+          if (authResponse && !authResponse.error) {
+            (window as any).gapi.load('picker', () => {
+              const picker = new (window as any).google.picker.PickerBuilder()
+                .addView((window as any).google.picker.ViewId.PDFS)
+                .addView((window as any).google.picker.ViewId.DOCUMENTS)
+                .setOAuthToken(authResponse.access_token)
+                .setDeveloperKey(apiKey)
+                .setCallback(async (data: any) => {
+                  if (data.action === (window as any).google.picker.Action.PICKED) {
+                    const file = data.docs[0];
+                    const fileId = file.id;
+                    const fileName = file.name;
+                    
+                    setIsLoading(true);
+                    setLoadingMessage(`Downloading ${fileName}...`);
+                    
+                    try {
+                      const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+                        headers: { Authorization: `Bearer ${authResponse.access_token}` }
+                      });
+                      const blob = await response.blob();
+                      await processFileContent(blob, fileName);
+                    } catch (error) {
+                      console.error('Error fetching from Drive:', error);
+                      alert('Failed to download file from Google Drive.');
+                    } finally {
+                      setIsLoading(false);
+                    }
+                  }
+                })
+                .build();
+              picker.setVisible(true);
+            });
+          }
+        });
+      });
+    };
+    document.body.appendChild(script);
+  };
+
+  const handleOneDrive = () => {
+    const clientId = import.meta.env.VITE_ONEDRIVE_CLIENT_ID;
+
+    if (!clientId) {
+      alert('OneDrive integration is not configured. Please add VITE_ONEDRIVE_CLIENT_ID to your environment.');
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = 'https://js.live.net/v7.2/OneDrive.js';
+    script.onload = () => {
+      const odOptions = {
+        clientId: clientId,
+        action: "download",
+        multiSelect: false,
+        openInNewWindow: true,
+        advanced: {
+          filter: ".pdf,.docx,.txt"
+        },
+        success: async (files: any) => {
+          const file = files.value[0];
+          const downloadUrl = file["@microsoft.graph.downloadUrl"];
+          const fileName = file.name;
+
+          setIsLoading(true);
+          setLoadingMessage(`Downloading ${fileName}...`);
+
+          try {
+            const response = await fetch(downloadUrl);
+            const blob = await response.blob();
+            await processFileContent(blob, fileName);
+          } catch (error) {
+            console.error('Error fetching from OneDrive:', error);
+            alert('Failed to download file from OneDrive.');
+          } finally {
+            setIsLoading(false);
+          }
+        },
+        cancel: () => { console.log("OneDrive picker cancelled"); },
+        error: (e: any) => { console.error("OneDrive error:", e); }
+      };
+      (window as any).OneDrive.open(odOptions);
+    };
+    document.body.appendChild(script);
   };
 
   return (
@@ -240,6 +350,8 @@ export default function App() {
             theme={theme}
             toggleTheme={toggleTheme}
             onCreate={handleCreateStory}
+            onGoogleDrive={handleGoogleDrive}
+            onOneDrive={handleOneDrive}
             onOpenEditor={(id: string) => { setActiveStoryId(id); setView('editor'); }}
             onOpenReader={(id: string) => { setActiveStoryId(id); setView('reader'); }}
           />
@@ -272,7 +384,7 @@ export default function App() {
   );
 }
 
-function Dashboard({ stories, onCreate, onOpenEditor, onOpenReader, theme, toggleTheme }: any) {
+function Dashboard({ stories, onCreate, onGoogleDrive, onOneDrive, onOpenEditor, onOpenReader, theme, toggleTheme }: any) {
   const totalWords = stories.reduce((acc: number, s: any) => acc + s.wordCount, 0);
   const novelsCount = stories.filter((s: any) => s.type === 'Novel').length;
   const shortStoriesCount = stories.filter((s: any) => s.type === 'Short Story').length;
@@ -304,6 +416,20 @@ function Dashboard({ stories, onCreate, onOpenEditor, onOpenReader, theme, toggl
           <label htmlFor="file-upload" className={`p-2 rounded-full transition-colors cursor-pointer ${theme === 'dark' ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`} title="Upload File">
             <Upload size={20} />
           </label>
+          <button 
+            onClick={onGoogleDrive} 
+            className={`p-2 rounded-full transition-colors ${theme === 'dark' ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`} 
+            title="Import from Google Drive"
+          >
+            <HardDrive size={20} />
+          </button>
+          <button 
+            onClick={onOneDrive} 
+            className={`p-2 rounded-full transition-colors ${theme === 'dark' ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`} 
+            title="Import from OneDrive"
+          >
+            <Cloud size={20} />
+          </button>
           <button onClick={() => onCreate('Idea')} className={`p-2 rounded-full transition-colors ${theme === 'dark' ? 'bg-amber-900/30 text-amber-400 hover:bg-amber-900/50' : 'bg-amber-100 text-amber-600 hover:bg-amber-200'}`} title="New Idea">
             <Lightbulb size={20} />
           </button>
@@ -403,6 +529,7 @@ function Editor({ story, onUpdate, onBack, isFocusMode, setIsFocusMode, theme, t
   const [showHistory, setShowHistory] = useState(false);
   const [versions, setVersions] = useState<StoryVersion[]>([]);
   const [previewVersion, setPreviewVersion] = useState<StoryVersion | null>(null);
+  const [activeFormats, setActiveFormats] = useState<string[]>([]);
 
   useEffect(() => {
     const stored = localStorage.getItem(`story_versions_${story.id}`);
@@ -414,6 +541,29 @@ function Editor({ story, onUpdate, onBack, isFocusMode, setIsFocusMode, theme, t
       }
     }
   }, [story.id]);
+
+  // Autosave logic
+  useEffect(() => {
+    const autosaveInterval = setInterval(() => {
+      saveDraftSilent();
+    }, 30000); // 30 seconds
+
+    return () => {
+      clearInterval(autosaveInterval);
+      saveDraftSilent(); // Save on unmount
+    };
+  }, [story.id, story.title, story.content, story.wordCount]);
+
+  const saveDraftSilent = () => {
+    const draft = {
+      title: story.title,
+      content: story.content,
+      wordCount: story.wordCount,
+      timestamp: Date.now()
+    };
+    localStorage.setItem(`autosave_story_${story.id}`, JSON.stringify(draft));
+    console.log(`Autosaved story ${story.id} at ${new Date().toLocaleTimeString()}`);
+  };
 
   const saveVersion = async () => {
     await showLoading('Saving version...', 600);
@@ -450,6 +600,45 @@ function Editor({ story, onUpdate, onBack, isFocusMode, setIsFocusMode, theme, t
     });
     setPreviewVersion(null);
     setShowHistory(false);
+  };
+
+  const applyFormat = (type: string) => {
+    if (!textareaRef.current) return;
+    const textarea = textareaRef.current;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const text = textarea.value;
+    const selectedText = text.substring(start, end);
+    
+    let formattedText = '';
+    let tag = '';
+    
+    switch (type) {
+      case 'bold': tag = '**'; break;
+      case 'italic': tag = '*'; break;
+      case 'underline': tag = '<u>'; break;
+    }
+
+    if (type === 'underline') {
+      formattedText = `<u>${selectedText}</u>`;
+    } else {
+      formattedText = `${tag}${selectedText}${tag}`;
+    }
+
+    const newContent = text.substring(0, start) + formattedText + text.substring(end);
+    
+    // Toggle active state
+    setActiveFormats(prev => 
+      prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]
+    );
+
+    onUpdate({ content: newContent, wordCount: newContent.trim() ? newContent.trim().split(/\s+/).length : 0, lastEdited: 'Just now' });
+    
+    // Restore focus and selection
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + tag.length, end + tag.length);
+    }, 0);
   };
 
   const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -525,9 +714,24 @@ function Editor({ story, onUpdate, onBack, isFocusMode, setIsFocusMode, theme, t
         </div>
 
         <div className={`hidden md:flex items-center gap-2 p-1 rounded-lg border transition-colors ${theme === 'dark' ? 'bg-slate-900 border-slate-800' : 'bg-slate-50 border-slate-100'}`}>
-          <ToolbarButton icon={<Bold size={18} />} theme={theme} />
-          <ToolbarButton icon={<Italic size={18} />} theme={theme} />
-          <ToolbarButton icon={<Underline size={18} />} theme={theme} />
+          <ToolbarButton 
+            icon={<Bold size={18} />} 
+            theme={theme} 
+            active={activeFormats.includes('bold')}
+            onClick={() => applyFormat('bold')}
+          />
+          <ToolbarButton 
+            icon={<Italic size={18} />} 
+            theme={theme} 
+            active={activeFormats.includes('italic')}
+            onClick={() => applyFormat('italic')}
+          />
+          <ToolbarButton 
+            icon={<Underline size={18} />} 
+            theme={theme} 
+            active={activeFormats.includes('underline')}
+            onClick={() => applyFormat('underline')}
+          />
           <div className={`w-px h-5 mx-1 ${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-200'}`}></div>
           <ToolbarButton icon={<AlignLeft size={18} />} active theme={theme} />
           <ToolbarButton icon={<AlignCenter size={18} />} theme={theme} />
@@ -651,9 +855,12 @@ function Editor({ story, onUpdate, onBack, isFocusMode, setIsFocusMode, theme, t
   );
 }
 
-function ToolbarButton({ icon, active, theme }: any) {
+function ToolbarButton({ icon, active, theme, onClick }: any) {
   return (
-    <button className={`p-2 rounded-md transition-colors ${active ? (theme === 'dark' ? 'bg-slate-800 text-violet-400 shadow-sm' : 'bg-white shadow-sm text-violet-600') : (theme === 'dark' ? 'text-slate-500 hover:text-slate-300 hover:bg-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50')}`}>
+    <button 
+      onClick={onClick}
+      className={`p-2 rounded-md transition-colors ${active ? (theme === 'dark' ? 'bg-slate-800 text-violet-400 shadow-sm' : 'bg-white shadow-sm text-violet-600') : (theme === 'dark' ? 'text-slate-500 hover:text-slate-300 hover:bg-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50')}`}
+    >
       {icon}
     </button>
   );
