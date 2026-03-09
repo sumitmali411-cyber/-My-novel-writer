@@ -25,8 +25,14 @@ import {
   Save,
   RotateCcw,
   X,
-  BookmarkPlus
+  BookmarkPlus,
+  Upload
 } from 'lucide-react';
+import * as mammoth from 'mammoth';
+import * as pdfjsLib from 'pdfjs-dist';
+
+// Set worker for pdfjs
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 // Types
 type StoryType = 'Short Story' | 'Novel' | 'Idea';
@@ -118,8 +124,66 @@ export default function App() {
     setStories(stories.map(s => s.id === id ? { ...s, ...updates } : s));
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const fileName = file.name;
+    const extension = fileName.split('.').pop()?.toLowerCase();
+    let content = '';
+
+    try {
+      if (extension === 'txt') {
+        content = await file.text();
+      } else if (extension === 'docx') {
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        content = result.value;
+      } else if (extension === 'pdf') {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        let fullText = '';
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          const pageText = textContent.items.map((item: any) => item.str).join(' ');
+          fullText += pageText + '\n';
+        }
+        content = fullText;
+      } else {
+        alert('Unsupported file type. Please upload .txt, .docx, or .pdf');
+        return;
+      }
+
+      const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
+      const newStory: Story = {
+        id: Date.now().toString(),
+        title: fileName.replace(/\.[^/.]+$/, ""),
+        type: wordCount > 5000 ? 'Novel' : 'Short Story',
+        content,
+        wordCount,
+        lastEdited: 'Just now',
+        color: wordCount > 5000 ? 'from-fuchsia-500 to-pink-500' : 'from-violet-500 to-purple-500'
+      };
+
+      setStories([newStory, ...stories]);
+      setActiveStoryId(newStory.id);
+      setView('editor');
+    } catch (error) {
+      console.error('Error parsing file:', error);
+      alert('Error parsing file. Please try again.');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
+      <input 
+        type="file" 
+        id="file-upload" 
+        className="hidden" 
+        accept=".txt,.docx,.pdf"
+        onChange={handleFileUpload}
+      />
       <AnimatePresence mode="wait">
         {view === 'dashboard' && (
           <Dashboard 
@@ -174,6 +238,9 @@ function Dashboard({ stories, onCreate, onOpenEditor, onOpenReader }: any) {
           <p className="text-slate-500 mt-1 font-medium">Your creative sanctuary</p>
         </div>
         <div className="flex gap-3">
+          <label htmlFor="file-upload" className="p-2 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 transition-colors cursor-pointer" title="Upload File">
+            <Upload size={20} />
+          </label>
           <button onClick={() => onCreate('Idea')} className="p-2 rounded-full bg-amber-100 text-amber-600 hover:bg-amber-200 transition-colors" title="New Idea">
             <Lightbulb size={20} />
           </button>
