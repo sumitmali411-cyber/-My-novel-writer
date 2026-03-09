@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   BookOpen, 
@@ -20,7 +20,12 @@ import {
   Download, 
   Share2,
   Clock,
-  Eye
+  Eye,
+  History,
+  Save,
+  RotateCcw,
+  X,
+  BookmarkPlus
 } from 'lucide-react';
 
 // Types
@@ -34,6 +39,14 @@ interface Story {
   wordCount: number;
   lastEdited: string;
   color: string;
+}
+
+interface StoryVersion {
+  id: string;
+  timestamp: number;
+  title: string;
+  content: string;
+  wordCount: number;
 }
 
 // Mock Data
@@ -257,12 +270,63 @@ function StatCard({ icon, label, value, color }: any) {
 
 function Editor({ story, onUpdate, onBack, isFocusMode, setIsFocusMode }: any) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [versions, setVersions] = useState<StoryVersion[]>([]);
+  const [previewVersion, setPreviewVersion] = useState<StoryVersion | null>(null);
+
+  useEffect(() => {
+    const stored = localStorage.getItem(`story_versions_${story.id}`);
+    if (stored) {
+      try {
+        setVersions(JSON.parse(stored));
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  }, [story.id]);
+
+  const saveVersion = () => {
+    const newVersion: StoryVersion = {
+      id: Date.now().toString(),
+      timestamp: Date.now(),
+      title: story.title,
+      content: story.content,
+      wordCount: story.wordCount
+    };
+    const updatedVersions = [newVersion, ...versions];
+    setVersions(updatedVersions);
+    localStorage.setItem(`story_versions_${story.id}`, JSON.stringify(updatedVersions));
+  };
+
+  const saveDraft = () => {
+    const draft = {
+      title: story.title,
+      content: story.content,
+      wordCount: story.wordCount,
+      timestamp: Date.now()
+    };
+    localStorage.setItem(`autosave_story_${story.id}`, JSON.stringify(draft));
+  };
+
+  const handleRestore = (version: StoryVersion) => {
+    onUpdate({
+      title: version.title,
+      content: version.content,
+      wordCount: version.wordCount,
+      lastEdited: 'Restored from history'
+    });
+    setPreviewVersion(null);
+    setShowHistory(false);
+  };
 
   const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const content = e.target.value;
     const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
     onUpdate({ content, wordCount, lastEdited: 'Just now' });
   };
+
+  const displayTitle = previewVersion ? previewVersion.title : story.title;
+  const displayContent = previewVersion ? previewVersion.content : story.content;
 
   if (isFocusMode) {
     return (
@@ -274,7 +338,7 @@ function Editor({ story, onUpdate, onBack, isFocusMode, setIsFocusMode }: any) {
       >
         <button 
           onClick={() => setIsFocusMode(false)}
-          className="fixed top-6 right-6 p-3 rounded-full bg-white/5 text-slate-400 hover:text-white hover:bg-white/10 transition-all opacity-0 hover:opacity-100 focus:opacity-100 group"
+          className="fixed top-6 right-6 p-3 rounded-full bg-white/5 text-slate-400 hover:text-white hover:bg-white/10 transition-all opacity-50 hover:opacity-100 focus:opacity-100 group"
         >
           <Minimize2 size={20} />
           <span className="absolute right-full mr-3 top-1/2 -translate-y-1/2 text-sm whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">Exit Focus</span>
@@ -283,15 +347,17 @@ function Editor({ story, onUpdate, onBack, isFocusMode, setIsFocusMode }: any) {
         <div className="w-full max-w-3xl px-8 py-24">
           <input
             type="text"
-            value={story.title}
+            value={displayTitle}
             onChange={(e) => onUpdate({ title: e.target.value })}
+            readOnly={!!previewVersion}
             className="w-full bg-transparent text-4xl font-serif font-bold text-slate-100 mb-8 focus:outline-none placeholder-slate-700"
             placeholder="Story Title"
           />
           <textarea
             ref={textareaRef}
-            value={story.content}
+            value={displayContent}
             onChange={handleContentChange}
+            readOnly={!!previewVersion}
             className="w-full h-[70vh] bg-transparent text-xl font-serif leading-relaxed text-slate-300 resize-none focus:outline-none placeholder-slate-700"
             placeholder="Start writing..."
           />
@@ -305,7 +371,7 @@ function Editor({ story, onUpdate, onBack, isFocusMode, setIsFocusMode }: any) {
       initial={{ opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: -20 }}
-      className="h-screen flex flex-col bg-white"
+      className="h-screen flex flex-col bg-white relative overflow-hidden"
     >
       {/* Toolbar */}
       <header className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-white/80 backdrop-blur-md sticky top-0 z-10">
@@ -316,11 +382,12 @@ function Editor({ story, onUpdate, onBack, isFocusMode, setIsFocusMode }: any) {
           <div className="flex flex-col">
             <input 
               type="text"
-              value={story.title}
+              value={displayTitle}
               onChange={(e) => onUpdate({ title: e.target.value })}
+              readOnly={!!previewVersion}
               className="text-xl font-bold text-slate-800 focus:outline-none bg-transparent"
             />
-            <span className="text-xs font-medium text-slate-400">{story.type} • {story.wordCount} words</span>
+            <span className="text-xs font-medium text-slate-400">{story.type} • {previewVersion ? previewVersion.wordCount : story.wordCount} words</span>
           </div>
         </div>
 
@@ -336,10 +403,31 @@ function Editor({ story, onUpdate, onBack, isFocusMode, setIsFocusMode }: any) {
           <ToolbarButton icon={<List size={18} />} />
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={saveDraft}
+            className="p-2 rounded-full text-slate-500 hover:text-violet-600 hover:bg-violet-50 transition-colors"
+            title="Save Draft"
+          >
+            <Save size={18} />
+          </button>
+          <button 
+            onClick={saveVersion}
+            className="p-2 rounded-full text-slate-500 hover:text-violet-600 hover:bg-violet-50 transition-colors"
+            title="Save Version"
+          >
+            <BookmarkPlus size={18} />
+          </button>
+          <button 
+            onClick={() => setShowHistory(!showHistory)}
+            className={`p-2 rounded-full transition-colors ${showHistory ? 'text-violet-600 bg-violet-50' : 'text-slate-500 hover:text-violet-600 hover:bg-violet-50'}`}
+            title="Version History"
+          >
+            <History size={18} />
+          </button>
           <button 
             onClick={() => setIsFocusMode(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-900 text-white text-sm font-medium hover:bg-slate-800 transition-colors shadow-sm"
+            className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-900 text-white text-sm font-medium hover:bg-slate-800 transition-colors shadow-sm ml-2"
           >
             <Maximize2 size={16} />
             <span className="hidden sm:inline">Focus Mode</span>
@@ -347,18 +435,78 @@ function Editor({ story, onUpdate, onBack, isFocusMode, setIsFocusMode }: any) {
         </div>
       </header>
 
+      {previewVersion && (
+        <div className="bg-amber-100 text-amber-800 px-6 py-2 flex justify-between items-center text-sm font-medium z-10">
+          <span>Previewing version from {new Date(previewVersion.timestamp).toLocaleString()}</span>
+          <div className="flex gap-4">
+            <button onClick={() => handleRestore(previewVersion)} className="hover:underline flex items-center gap-1"><RotateCcw size={14}/> Restore This Version</button>
+            <button onClick={() => setPreviewVersion(null)} className="hover:underline flex items-center gap-1"><X size={14}/> Cancel</button>
+          </div>
+        </div>
+      )}
+
       {/* Editor Area */}
       <div className="flex-1 overflow-y-auto bg-slate-50/50">
         <div className="max-w-3xl mx-auto py-12 px-8">
           <textarea
             ref={textareaRef}
-            value={story.content}
+            value={displayContent}
             onChange={handleContentChange}
+            readOnly={!!previewVersion}
             className="w-full min-h-[70vh] bg-transparent text-lg font-serif leading-loose text-slate-800 resize-none focus:outline-none placeholder-slate-300"
             placeholder="Once upon a time..."
           />
         </div>
       </div>
+
+      {/* History Sidebar */}
+      <AnimatePresence>
+        {showHistory && (
+          <motion.div 
+            initial={{ x: '100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '100%' }}
+            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+            className="absolute right-0 top-0 bottom-0 w-80 bg-white shadow-2xl border-l border-slate-200 z-50 flex flex-col"
+          >
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                <History size={18} />
+                Version History
+              </h3>
+              <button onClick={() => { setShowHistory(false); setPreviewVersion(null); }} className="p-1 text-slate-400 hover:text-slate-700 rounded-full hover:bg-slate-200 transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {versions.length === 0 ? (
+                <p className="text-sm text-slate-500 text-center py-8">No saved versions yet. Click the save icon to create one.</p>
+              ) : (
+                versions.map(v => (
+                  <div 
+                    key={v.id} 
+                    className={`p-3 rounded-xl border cursor-pointer transition-all ${previewVersion?.id === v.id ? 'border-violet-500 bg-violet-50' : 'border-slate-200 hover:border-violet-300 hover:bg-slate-50'}`}
+                    onClick={() => setPreviewVersion(v)}
+                  >
+                    <div className="font-medium text-slate-800 mb-1">{new Date(v.timestamp).toLocaleString()}</div>
+                    <div className="text-xs text-slate-500 flex justify-between items-center">
+                      <span>{v.wordCount} words</span>
+                      {previewVersion?.id === v.id && (
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); handleRestore(v); }}
+                          className="text-violet-600 font-semibold hover:text-violet-700 flex items-center gap-1 bg-violet-100 px-2 py-1 rounded-md"
+                        >
+                          <RotateCcw size={12} /> Restore
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
@@ -372,15 +520,19 @@ function ToolbarButton({ icon, active }: any) {
 }
 
 function Reader({ story, onBack, onEdit }: any) {
+  const handleDownload = () => {
+    window.print();
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.98 }}
-      className="h-screen flex flex-col bg-slate-200/80"
+      className="h-screen flex flex-col bg-slate-200/80 print:bg-white print:h-auto"
     >
       {/* Reader Toolbar */}
-      <header className="flex items-center justify-between px-6 py-4 bg-slate-800 text-white shadow-md z-10">
+      <header className="flex items-center justify-between px-6 py-4 bg-slate-800 text-white shadow-md z-10 print:hidden">
         <div className="flex items-center gap-4">
           <button onClick={onBack} className="p-2 -ml-2 rounded-full text-slate-300 hover:text-white hover:bg-slate-700 transition-colors">
             <ChevronLeft size={24} />
@@ -397,7 +549,7 @@ function Reader({ story, onBack, onEdit }: any) {
           <button className="p-2 rounded-full text-slate-300 hover:text-white hover:bg-slate-700 transition-colors" title="Share">
             <Share2 size={20} />
           </button>
-          <button className="flex items-center gap-2 px-4 py-2 rounded-full bg-violet-600 text-white text-sm font-medium hover:bg-violet-500 transition-colors shadow-sm">
+          <button onClick={handleDownload} className="flex items-center gap-2 px-4 py-2 rounded-full bg-violet-600 text-white text-sm font-medium hover:bg-violet-500 transition-colors shadow-sm">
             <Download size={16} />
             <span className="hidden sm:inline">Download PDF</span>
           </button>
@@ -405,11 +557,11 @@ function Reader({ story, onBack, onEdit }: any) {
       </header>
 
       {/* PDF View */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-8 flex justify-center">
-        <div className="bg-white w-full max-w-4xl min-h-[1056px] shadow-2xl rounded-sm p-12 sm:p-24 relative">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-8 flex justify-center print:p-0 print:overflow-visible">
+        <div className="bg-white w-full max-w-4xl min-h-[1056px] shadow-2xl rounded-sm p-12 sm:p-24 relative print:shadow-none print:min-h-0 print:p-0">
           {/* Decorative PDF elements */}
-          <div className="absolute top-8 right-12 text-xs text-slate-400 font-mono">Page 1</div>
-          <div className="absolute bottom-8 left-0 right-0 text-center text-xs text-slate-400 font-mono">Generated by Inkwell</div>
+          <div className="absolute top-8 right-12 text-xs text-slate-400 font-mono print:hidden">Page 1</div>
+          <div className="absolute bottom-8 left-0 right-0 text-center text-xs text-slate-400 font-mono print:hidden">Generated by Inkwell</div>
           
           <h1 className="text-4xl sm:text-5xl font-serif font-bold text-center text-slate-900 mb-6 mt-10">
             {story.title}
