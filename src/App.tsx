@@ -30,9 +30,8 @@ import {
   Upload,
   Sun,
   Moon,
-  Cloud,
-  HardDrive,
   Loader2,
+  Trash2,
   FileDown,
   FileJson,
   CheckCircle2,
@@ -48,6 +47,10 @@ import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import { jsPDF } from 'jspdf';
 import { GoogleGenAI } from "@google/genai";
+
+import { signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged, User } from 'firebase/auth';
+import { collection, doc, setDoc, getDoc, getDocs, onSnapshot, query, where, deleteDoc } from 'firebase/firestore';
+import { auth, db } from './firebase';
 
 // Set worker for pdfjs
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
@@ -155,49 +158,102 @@ export default function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
 
-  // Load from localStorage
+  // Auth listener
   useEffect(() => {
-    const storedStories = localStorage.getItem('inkwell_stories');
-    if (storedStories) {
-      try {
-        setStories(JSON.parse(storedStories));
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    const storedProjects = localStorage.getItem('inkwell_projects');
-    if (storedProjects) {
-      try {
-        setProjects(JSON.parse(storedProjects));
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    const storedTags = localStorage.getItem('inkwell_tags');
-    if (storedTags) {
-      try {
-        setTags(JSON.parse(storedTags));
-      } catch (e) {
-        console.error(e);
-      }
-    }
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setIsAuthReady(true);
+    });
+    return () => unsubscribe();
   }, []);
 
-  // Save to localStorage
-  useEffect(() => {
-    localStorage.setItem('inkwell_stories', JSON.stringify(stories));
-  }, [stories]);
+  const handleLogin = async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      console.error("Error logging in:", error);
+      alert("Failed to log in.");
+    }
+  };
 
-  useEffect(() => {
-    localStorage.setItem('inkwell_projects', JSON.stringify(projects));
-  }, [projects]);
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setStories([]);
+      setProjects([]);
+      setTags(defaultTags);
+    } catch (error) {
+      console.error("Error logging out:", error);
+    }
+  };
 
+  // Load from Firestore
   useEffect(() => {
-    localStorage.setItem('inkwell_tags', JSON.stringify(tags));
-  }, [tags]);
+    if (!isAuthReady || !user) {
+      setStories([]);
+      setProjects([]);
+      setTags(defaultTags);
+      return;
+    }
+
+    const loadData = async () => {
+      try {
+        const userDocRef = doc(db, 'users', user.uid);
+        const userDoc = await getDoc(userDocRef);
+        
+        if (!userDoc.exists()) {
+          // Initialize user data
+          await setDoc(userDocRef, {
+            email: user.email,
+            createdAt: Date.now()
+          });
+          
+          // Initialize default tags
+          const tagsRef = collection(db, `users/${user.uid}/tags`);
+          for (const tag of defaultTags) {
+            await setDoc(doc(tagsRef, tag.id), tag);
+          }
+        }
+
+        // Listen to stories
+        const storiesUnsubscribe = onSnapshot(collection(db, `users/${user.uid}/stories`), (snapshot) => {
+          const loadedStories = snapshot.docs.map(doc => doc.data() as Story);
+          setStories(loadedStories);
+        });
+
+        // Listen to projects
+        const projectsUnsubscribe = onSnapshot(collection(db, `users/${user.uid}/projects`), (snapshot) => {
+          const loadedProjects = snapshot.docs.map(doc => doc.data() as Project);
+          setProjects(loadedProjects);
+        });
+
+        // Listen to tags
+        const tagsUnsubscribe = onSnapshot(collection(db, `users/${user.uid}/tags`), (snapshot) => {
+          const loadedTags = snapshot.docs.map(doc => doc.data() as Tag);
+          if (loadedTags.length > 0) {
+            setTags(loadedTags);
+          }
+        });
+
+        return () => {
+          storiesUnsubscribe();
+          projectsUnsubscribe();
+          tagsUnsubscribe();
+        };
+      } catch (error) {
+        console.error("Error loading data:", error);
+      }
+    };
+
+    loadData();
+  }, [user, isAuthReady]);
+
+  // Save to Firestore (handled in specific functions now instead of generic useEffects)
+  // Removed generic localStorage useEffects
 
   const activeStory = stories.find(s => s.id === activeStoryId);
 
@@ -213,6 +269,7 @@ export default function App() {
   };
 
   const handleCreateStory = async (type: StoryType) => {
+    if (!user) return;
     await showLoading(`Creating ${type}...`, 800);
     const newStory: Story = {
       id: Date.now().toString(),
@@ -226,16 +283,29 @@ export default function App() {
              'from-amber-400 to-orange-500',
       tags: []
     };
-    setStories([newStory, ...stories]);
-    setActiveStoryId(newStory.id);
-    setView('editor');
+    
+    try {
+      await setDoc(doc(db, `users/${user.uid}/stories`, newStory.id), newStory);
+      setActiveStoryId(newStory.id);
+      setView('editor');
+    } catch (error) {
+      console.error("Error creating story:", error);
+      alert("Failed to create story.");
+    }
   };
 
-  const handleUpdateStory = (id: string, updates: Partial<Story>) => {
-    setStories(stories.map(s => s.id === id ? { ...s, ...updates } : s));
+  const handleUpdateStory = async (id: string, updates: Partial<Story>) => {
+    if (!user) return;
+    try {
+      const storyRef = doc(db, `users/${user.uid}/stories`, id);
+      await setDoc(storyRef, updates, { merge: true });
+    } catch (error) {
+      console.error("Error updating story:", error);
+    }
   };
 
   const processFileContent = async (file: File | Blob, fileName: string) => {
+    if (!user) return;
     setIsLoading(true);
     setLoadingMessage(`Parsing ${fileName}...`);
 
@@ -280,7 +350,7 @@ export default function App() {
         tags: []
       };
 
-      setStories([newStory, ...stories]);
+      await setDoc(doc(db, `users/${user.uid}/stories`, newStory.id), newStory);
       setActiveStoryId(newStory.id);
       setIsLoading(false);
       setView('editor');
@@ -299,108 +369,20 @@ export default function App() {
     await processFileContent(file, file.name);
   };
 
-  const handleGoogleDrive = () => {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-    const apiKey = import.meta.env.VITE_GOOGLE_API_KEY;
-
-    if (!clientId || !apiKey) {
-      alert('Google Drive integration is not configured. Please add VITE_GOOGLE_CLIENT_ID and VITE_GOOGLE_API_KEY to your environment.');
-      return;
+  const handleDeleteStory = async (id: string) => {
+    if (!user) return;
+    if (!confirm('Are you sure you want to delete this story?')) return;
+    try {
+      const storyRef = doc(db, `users/${user.uid}/stories`, id);
+      await deleteDoc(storyRef);
+      if (activeStoryId === id) {
+        setActiveStoryId(null);
+        setView('dashboard');
+      }
+    } catch (error) {
+      console.error("Error deleting story:", error);
+      alert("Failed to delete story.");
     }
-
-    // Load Google API
-    const script = document.createElement('script');
-    script.src = 'https://apis.google.com/js/api.js';
-    script.onload = () => {
-      (window as any).gapi.load('auth2', () => {
-        (window as any).gapi.auth2.authorize({
-          client_id: clientId,
-          scope: 'https://www.googleapis.com/auth/drive.readonly',
-        }, (authResponse: any) => {
-          if (authResponse && !authResponse.error) {
-            (window as any).gapi.load('picker', () => {
-              const picker = new (window as any).google.picker.PickerBuilder()
-                .addView((window as any).google.picker.ViewId.PDFS)
-                .addView((window as any).google.picker.ViewId.DOCUMENTS)
-                .setOAuthToken(authResponse.access_token)
-                .setDeveloperKey(apiKey)
-                .setCallback(async (data: any) => {
-                  if (data.action === (window as any).google.picker.Action.PICKED) {
-                    const file = data.docs[0];
-                    const fileId = file.id;
-                    const fileName = file.name;
-                    
-                    setIsLoading(true);
-                    setLoadingMessage(`Downloading ${fileName}...`);
-                    
-                    try {
-                      const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-                        headers: { Authorization: `Bearer ${authResponse.access_token}` }
-                      });
-                      const blob = await response.blob();
-                      await processFileContent(blob, fileName);
-                    } catch (error) {
-                      console.error('Error fetching from Drive:', error);
-                      alert('Failed to download file from Google Drive.');
-                    } finally {
-                      setIsLoading(false);
-                    }
-                  }
-                })
-                .build();
-              picker.setVisible(true);
-            });
-          }
-        });
-      });
-    };
-    document.body.appendChild(script);
-  };
-
-  const handleOneDrive = () => {
-    const clientId = import.meta.env.VITE_ONEDRIVE_CLIENT_ID;
-
-    if (!clientId) {
-      alert('OneDrive integration is not configured. Please add VITE_ONEDRIVE_CLIENT_ID to your environment.');
-      return;
-    }
-
-    const script = document.createElement('script');
-    script.src = 'https://js.live.net/v7.2/OneDrive.js';
-    script.onload = () => {
-      const odOptions = {
-        clientId: clientId,
-        action: "download",
-        multiSelect: false,
-        openInNewWindow: true,
-        advanced: {
-          filter: ".pdf,.docx,.txt"
-        },
-        success: async (files: any) => {
-          const file = files.value[0];
-          const downloadUrl = file["@microsoft.graph.downloadUrl"];
-          const fileName = file.name;
-
-          setIsLoading(true);
-          setLoadingMessage(`Downloading ${fileName}...`);
-
-          try {
-            const response = await fetch(downloadUrl);
-            const blob = await response.blob();
-            await processFileContent(blob, fileName);
-          } catch (error) {
-            console.error('Error fetching from OneDrive:', error);
-            alert('Failed to download file from OneDrive.');
-          } finally {
-            setIsLoading(false);
-          }
-        },
-        cancel: () => { console.log("OneDrive picker cancelled"); },
-        error: (e: any) => { console.error("OneDrive error:", e); }
-      };
-      (window as any).OneDrive.open(odOptions);
-    };
-    document.body.appendChild(script);
   };
 
   return (
@@ -434,9 +416,28 @@ export default function App() {
       </AnimatePresence>
 
       <AnimatePresence mode="wait">
-        {view === 'dashboard' && (
+        {!isAuthReady ? (
+          <div className="flex items-center justify-center h-screen">
+            <Loader2 size={48} className="animate-spin text-violet-500" />
+          </div>
+        ) : !user ? (
+          <div className="flex flex-col items-center justify-center h-screen gap-6">
+            <h1 className="text-4xl font-extrabold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-violet-600 to-fuchsia-600">
+              Inkwell
+            </h1>
+            <p className="text-slate-500">Your creative sanctuary, synced to the cloud.</p>
+            <button 
+              onClick={handleLogin}
+              className="px-8 py-4 bg-violet-600 text-white rounded-2xl font-bold hover:bg-violet-500 transition-colors shadow-lg shadow-violet-500/30"
+            >
+              Sign in with Google
+            </button>
+          </div>
+        ) : view === 'dashboard' && (
           <Dashboard 
             key="dashboard"
+            user={user}
+            onLogout={handleLogout}
             stories={stories} 
             projects={projects}
             setProjects={setProjects}
@@ -445,16 +446,16 @@ export default function App() {
             theme={theme}
             toggleTheme={toggleTheme}
             onCreate={handleCreateStory}
-            onGoogleDrive={handleGoogleDrive}
-            onOneDrive={handleOneDrive}
+            onDeleteStory={handleDeleteStory}
             onOpenEditor={(id: string) => { setActiveStoryId(id); setView('editor'); }}
             onOpenReader={(id: string) => { setActiveStoryId(id); setView('reader'); }}
             onUpdateStory={handleUpdateStory}
           />
         )}
-        {view === 'editor' && activeStory && (
+        {view === 'editor' && activeStory && user && (
           <Editor 
             key="editor"
+            user={user}
             story={activeStory}
             stories={stories}
             tags={tags}
@@ -467,7 +468,7 @@ export default function App() {
             showLoading={showLoading}
           />
         )}
-        {view === 'reader' && activeStory && (
+        {view === 'reader' && activeStory && user && (
           <Reader 
             key="reader"
             story={activeStory}
@@ -482,7 +483,7 @@ export default function App() {
   );
 }
 
-function Dashboard({ stories, projects, setProjects, tags, setTags, onCreate, onGoogleDrive, onOneDrive, onOpenEditor, onOpenReader, theme, toggleTheme, onUpdateStory }: any) {
+function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTags, onCreate, onDeleteStory, onOpenEditor, onOpenReader, theme, toggleTheme, onUpdateStory }: any) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagFilterMode, setTagFilterMode] = useState<'AND' | 'OR'>('OR');
@@ -531,8 +532,8 @@ function Dashboard({ stories, projects, setProjects, tags, setTags, onCreate, on
     return matchesSearch && matchesTags && matchesProject && matchesType && matchesWordCount && matchesDate;
   });
 
-  const handleCreateProject = () => {
-    if (!newProjectTitle.trim()) return;
+  const handleCreateProject = async () => {
+    if (!newProjectTitle.trim() || !user) return;
     const newProject: Project = {
       id: Date.now().toString(),
       title: newProjectTitle.trim(),
@@ -540,9 +541,14 @@ function Dashboard({ stories, projects, setProjects, tags, setTags, onCreate, on
       color: 'from-indigo-500 to-blue-600',
       createdAt: Date.now()
     };
-    setProjects([...projects, newProject]);
-    setNewProjectTitle('');
-    setShowNewProjectModal(false);
+    try {
+      await setDoc(doc(db, `users/${user.uid}/projects`, newProject.id), newProject);
+      setNewProjectTitle('');
+      setShowNewProjectModal(false);
+    } catch (error) {
+      console.error("Error creating project:", error);
+      alert("Failed to create project.");
+    }
   };
 
   const activeProject = projects.find((p: any) => p.id === activeProjectId);
@@ -557,6 +563,14 @@ function Dashboard({ stories, projects, setProjects, tags, setTags, onCreate, on
     setSelectedStoryIds(prev => 
       prev.includes(id) ? prev.filter(sid => sid !== id) : [...prev, id]
     );
+  };
+
+  const handleBatchDelete = () => {
+    if (confirm(`Are you sure you want to delete ${selectedStoryIds.length} stories?`)) {
+      selectedStoryIds.forEach(id => onDeleteStory(id));
+      setIsBatchMode(false);
+      setSelectedStoryIds([]);
+    }
   };
 
   const handleBatchExport = (format: 'pdf' | 'md' | 'txt') => {
@@ -607,6 +621,12 @@ function Dashboard({ stories, projects, setProjects, tags, setTags, onCreate, on
         </div>
         <div className="flex gap-3 items-center">
           <button 
+            onClick={onLogout}
+            className={`px-4 py-2 rounded-full text-sm font-bold transition-colors ${theme === 'dark' ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+          >
+            Sign Out
+          </button>
+          <button 
             onClick={toggleTheme} 
             className={`p-2 rounded-full transition-colors ${theme === 'dark' ? 'bg-slate-800 text-amber-400 hover:bg-slate-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
             title="Toggle Theme"
@@ -617,20 +637,6 @@ function Dashboard({ stories, projects, setProjects, tags, setTags, onCreate, on
           <label htmlFor="file-upload" className={`p-2 rounded-full transition-colors cursor-pointer ${theme === 'dark' ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`} title="Upload File">
             <Upload size={20} />
           </label>
-          <button 
-            onClick={onGoogleDrive} 
-            className={`p-2 rounded-full transition-colors ${theme === 'dark' ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`} 
-            title="Import from Google Drive"
-          >
-            <HardDrive size={20} />
-          </button>
-          <button 
-            onClick={onOneDrive} 
-            className={`p-2 rounded-full transition-colors ${theme === 'dark' ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`} 
-            title="Import from OneDrive"
-          >
-            <Cloud size={20} />
-          </button>
           <button onClick={() => onCreate('Idea')} className={`p-2 rounded-full transition-colors ${theme === 'dark' ? 'bg-amber-900/30 text-amber-400 hover:bg-amber-900/50' : 'bg-amber-100 text-amber-600 hover:bg-amber-200'}`} title="New Idea">
             <Lightbulb size={20} />
           </button>
@@ -911,6 +917,13 @@ function Dashboard({ stories, projects, setProjects, tags, setTags, onCreate, on
                     >
                       <Eye size={18} />
                     </button>
+                    <button 
+                      className={`p-2 rounded-full transition-colors ${theme === 'dark' ? 'text-slate-500 hover:text-rose-400 hover:bg-slate-800' : 'text-slate-400 hover:text-rose-600 hover:bg-slate-100'}`}
+                      onClick={(e) => { e.stopPropagation(); onDeleteStory(story.id); }}
+                      title="Delete Story"
+                    >
+                      <Trash2 size={18} />
+                    </button>
                   </div>
                 </div>
                 
@@ -1020,6 +1033,13 @@ function Dashboard({ stories, projects, setProjects, tags, setTags, onCreate, on
             >
               <Download size={18} />
               Export Selected
+            </button>
+            <button 
+              onClick={handleBatchDelete}
+              className="flex items-center gap-2 px-6 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 transition-colors font-bold text-sm"
+            >
+              <Trash2 size={18} />
+              Delete Selected
             </button>
           </motion.div>
         )}
@@ -1227,7 +1247,7 @@ function StatCard({ icon, label, value, color, theme }: any) {
   );
 }
 
-function Editor({ story, stories, tags, onUpdate, onBack, isFocusMode, setIsFocusMode, theme, toggleTheme, showLoading }: any) {
+function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, setIsFocusMode, theme, toggleTheme, showLoading }: any) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [versions, setVersions] = useState<StoryVersion[]>([]);
@@ -1348,40 +1368,55 @@ function Editor({ story, stories, tags, onUpdate, onBack, isFocusMode, setIsFocu
   }, [toast]);
 
   useEffect(() => {
-    const stored = localStorage.getItem(`story_versions_${story.id}`);
-    if (stored) {
-      try {
-        setVersions(JSON.parse(stored));
-      } catch (e) {
-        console.error(e);
-      }
-    }
-  }, [story.id]);
+    if (!user) return;
+    const versionsRef = collection(db, `users/${user.uid}/stories/${story.id}/versions`);
+    const unsubscribe = onSnapshot(versionsRef, (snapshot) => {
+      const loadedVersions = snapshot.docs.map(doc => doc.data() as StoryVersion).sort((a, b) => b.timestamp - a.timestamp);
+      setVersions(loadedVersions);
+    });
+    return () => unsubscribe();
+  }, [story.id, user]);
+
+  const storyRef = useRef(story);
+  useEffect(() => {
+    storyRef.current = story;
+  }, [story]);
 
   // Autosave logic
   useEffect(() => {
     const autosaveInterval = setInterval(() => {
-      saveDraftSilent();
+      const currentStory = storyRef.current;
+      if (!user) return;
+      setDoc(doc(db, `users/${user.uid}/stories`, currentStory.id), {
+        title: currentStory.title,
+        content: currentStory.content,
+        wordCount: currentStory.wordCount,
+        lastEdited: 'Just now'
+      }, { merge: true }).then(() => {
+        console.log(`Autosaved story ${currentStory.id} at ${new Date().toLocaleTimeString()}`);
+      }).catch(error => {
+        console.error("Error autosaving:", error);
+      });
     }, 30000); // 30 seconds
 
     return () => {
       clearInterval(autosaveInterval);
-      saveDraftSilent(); // Save on unmount
+      const currentStory = storyRef.current;
+      if (user) {
+        setDoc(doc(db, `users/${user.uid}/stories`, currentStory.id), {
+          title: currentStory.title,
+          content: currentStory.content,
+          wordCount: currentStory.wordCount,
+          lastEdited: 'Just now'
+        }, { merge: true }).catch(error => {
+          console.error("Error autosaving on unmount:", error);
+        });
+      }
     };
-  }, [story.id, story.title, story.content, story.wordCount]);
-
-  const saveDraftSilent = () => {
-    const draft = {
-      title: story.title,
-      content: story.content,
-      wordCount: story.wordCount,
-      timestamp: Date.now()
-    };
-    localStorage.setItem(`autosave_story_${story.id}`, JSON.stringify(draft));
-    console.log(`Autosaved story ${story.id} at ${new Date().toLocaleTimeString()}`);
-  };
+  }, [story.id, user]);
 
   const saveVersion = async () => {
+    if (!user) return;
     await showLoading('Saving version...', 600);
     const newVersion: StoryVersion = {
       id: Date.now().toString(),
@@ -1390,20 +1425,28 @@ function Editor({ story, stories, tags, onUpdate, onBack, isFocusMode, setIsFocu
       content: story.content,
       wordCount: story.wordCount
     };
-    const updatedVersions = [newVersion, ...versions];
-    setVersions(updatedVersions);
-    localStorage.setItem(`story_versions_${story.id}`, JSON.stringify(updatedVersions));
+    try {
+      await setDoc(doc(db, `users/${user.uid}/stories/${story.id}/versions`, newVersion.id), newVersion);
+      setVersions([newVersion, ...versions]);
+    } catch (error) {
+      console.error("Error saving version:", error);
+      alert("Failed to save version.");
+    }
   };
 
   const saveDraft = async () => {
-    await showLoading('Autosaving draft...', 500);
-    const draft = {
-      title: story.title,
-      content: story.content,
-      wordCount: story.wordCount,
-      timestamp: Date.now()
-    };
-    localStorage.setItem(`autosave_story_${story.id}`, JSON.stringify(draft));
+    if (!user) return;
+    await showLoading('Saving draft...', 500);
+    try {
+      await setDoc(doc(db, `users/${user.uid}/stories`, story.id), {
+        title: story.title,
+        content: story.content,
+        wordCount: story.wordCount,
+        lastEdited: 'Just now'
+      }, { merge: true });
+    } catch (error) {
+      console.error("Error saving draft:", error);
+    }
   };
 
   const handleRestore = async (version: StoryVersion) => {
