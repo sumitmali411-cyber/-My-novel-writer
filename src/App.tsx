@@ -145,6 +145,20 @@ const defaultTags: Tag[] = [
   { id: '4', label: 'Character Notes', color: '#f472b6', createdAt: Date.now() },
   { id: '5', label: 'World Building', color: '#fbbf24', createdAt: Date.now() },
   { id: '6', label: 'Visual Prompt', color: '#818cf8', createdAt: Date.now() },
+  { id: '7', label: 'Indian Language', color: '#f97316', createdAt: Date.now() },
+];
+
+const INDIAN_LANGUAGES = [
+  { code: 'hi-IN', name: 'Hindi' },
+  { code: 'bn-IN', name: 'Bengali' },
+  { code: 'te-IN', name: 'Telugu' },
+  { code: 'mr-IN', name: 'Marathi' },
+  { code: 'ta-IN', name: 'Tamil' },
+  { code: 'gu-IN', name: 'Gujarati' },
+  { code: 'kn-IN', name: 'Kannada' },
+  { code: 'ml-IN', name: 'Malayalam' },
+  { code: 'pa-IN', name: 'Punjabi' },
+  { code: 'or-IN', name: 'Odia' },
 ];
 
 export default function App() {
@@ -160,6 +174,25 @@ export default function App() {
   const [loadingMessage, setLoadingMessage] = useState('');
   const [user, setUser] = useState<User | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    confirmText?: string;
+    type?: 'danger' | 'primary';
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+  });
+  const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
 
   // Auth listener
   useEffect(() => {
@@ -176,7 +209,7 @@ export default function App() {
       await signInWithPopup(auth, provider);
     } catch (error) {
       console.error("Error logging in:", error);
-      alert("Failed to log in.");
+      showToast("Failed to log in.", "error");
     }
   };
 
@@ -305,12 +338,16 @@ export default function App() {
       setView('editor');
     } catch (error) {
       console.error("Error creating story:", error);
-      alert("Failed to create story.");
+      showToast("Failed to create story.", "error");
     }
   };
 
   const handleUpdateStory = async (id: string, updates: Partial<Story>) => {
     if (!user) return;
+    
+    // Update local state immediately for responsive UI
+    setStories(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
+
     try {
       const storyRef = doc(db, `users/${user.uid}/stories`, id);
       await setDoc(storyRef, updates, { merge: true });
@@ -347,7 +384,7 @@ export default function App() {
         content = fullText;
       } else {
         setIsLoading(false);
-        alert('Unsupported file type. Please upload .txt, .docx, or .pdf');
+        showToast('Unsupported file type. Please upload .txt, .docx, or .pdf', 'error');
         return;
       }
 
@@ -372,7 +409,7 @@ export default function App() {
     } catch (error) {
       console.error('Error parsing file:', error);
       setIsLoading(false);
-      alert('Error parsing file. Please try again.');
+      showToast('Error parsing file. Please try again.', 'error');
     } finally {
       setLoadingMessage('');
     }
@@ -386,18 +423,28 @@ export default function App() {
 
   const handleDeleteStory = async (id: string) => {
     if (!user) return;
-    if (!confirm('Are you sure you want to delete this story?')) return;
-    try {
-      const storyRef = doc(db, `users/${user.uid}/stories`, id);
-      await deleteDoc(storyRef);
-      if (activeStoryId === id) {
-        setActiveStoryId(null);
-        setView('dashboard');
+    setConfirmModal({
+      isOpen: true,
+      title: 'Delete Story',
+      message: 'Are you sure you want to delete this story? This action cannot be undone.',
+      confirmText: 'Delete',
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          const storyRef = doc(db, `users/${user.uid}/stories`, id);
+          await deleteDoc(storyRef);
+          if (activeStoryId === id) {
+            setActiveStoryId(null);
+            setView('dashboard');
+          }
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+          showToast("Story deleted successfully");
+        } catch (error) {
+          console.error("Error deleting story:", error);
+          showToast("Failed to delete story.", "error");
+        }
       }
-    } catch (error) {
-      console.error("Error deleting story:", error);
-      alert("Failed to delete story.");
-    }
+    });
   };
 
   return (
@@ -458,6 +505,8 @@ export default function App() {
             setProjects={setProjects}
             tags={tags}
             setTags={setTags}
+            setConfirmModal={setConfirmModal}
+            showToast={showToast}
             theme={theme}
             toggleTheme={toggleTheme}
             onCreate={handleCreateStory}
@@ -478,6 +527,7 @@ export default function App() {
             toggleTheme={toggleTheme}
             onUpdate={(updates: Partial<Story>) => handleUpdateStory(activeStory.id, updates)}
             onBack={() => setView('dashboard')}
+            showToast={showToast}
             isFocusMode={isFocusMode}
             setIsFocusMode={setIsFocusMode}
             showLoading={showLoading}
@@ -494,11 +544,36 @@ export default function App() {
           />
         )}
       </AnimatePresence>
+
+      <ConfirmationModal 
+        isOpen={confirmModal.isOpen}
+        onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmModal.onConfirm}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        confirmText={confirmModal.confirmText}
+        type={confirmModal.type}
+        theme={theme}
+      />
+
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, x: '-50%' }}
+            animate={{ opacity: 1, y: 0, x: '-50%' }}
+            exit={{ opacity: 0, y: 50, x: '-50%' }}
+            className={`fixed bottom-8 left-1/2 z-[300] px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border ${toast.type === 'error' ? 'bg-rose-600 border-rose-500 text-white' : 'bg-emerald-600 border-emerald-500 text-white'}`}
+          >
+            {toast.type === 'error' ? <AlertCircle size={20} /> : <CheckCircle2 size={20} />}
+            <span className="font-bold text-sm tracking-wide">{toast.message}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
-function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTags, onCreate, onDeleteStory, onOpenEditor, onOpenReader, theme, toggleTheme, onUpdateStory }: any) {
+function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTags, setConfirmModal, showToast, onCreate, onDeleteStory, onOpenEditor, onOpenReader, theme, toggleTheme, onUpdateStory }: any) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagFilterMode, setTagFilterMode] = useState<'AND' | 'OR'>('OR');
@@ -560,9 +635,10 @@ function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTa
       await setDoc(doc(db, `users/${user.uid}/projects`, newProject.id), newProject);
       setNewProjectTitle('');
       setShowNewProjectModal(false);
+      showToast("Project created successfully");
     } catch (error) {
       console.error("Error creating project:", error);
-      alert("Failed to create project.");
+      showToast("Failed to create project.", "error");
     }
   };
 
@@ -581,11 +657,18 @@ function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTa
   };
 
   const handleBatchDelete = () => {
-    if (confirm(`Are you sure you want to delete ${selectedStoryIds.length} stories?`)) {
-      selectedStoryIds.forEach(id => onDeleteStory(id));
-      setIsBatchMode(false);
-      setSelectedStoryIds([]);
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Batch Delete',
+      message: `Are you sure you want to delete ${selectedStoryIds.length} stories? This action cannot be undone.`,
+      confirmText: 'Delete All',
+      type: 'danger',
+      onConfirm: () => {
+        selectedStoryIds.forEach(id => onDeleteStory(id));
+        setIsBatchMode(false);
+        setSelectedStoryIds([]);
+      }
+    });
   };
 
   const handleBatchExport = (format: 'pdf' | 'md' | 'txt') => {
@@ -988,6 +1071,7 @@ function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTa
         onClose={() => setShowTagManager(false)} 
         tags={tags} 
         setTags={setTags} 
+        setConfirmModal={setConfirmModal}
         theme={theme} 
         stories={stories}
         onUpdateStory={onUpdateStory}
@@ -1136,7 +1220,7 @@ function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTa
   );
 }
 
-function TagManager({ isOpen, onClose, tags, setTags, theme, stories, onUpdateStory }: any) {
+function TagManager({ isOpen, onClose, tags, setTags, setConfirmModal, theme, stories, onUpdateStory }: any) {
   const [newTagLabel, setNewTagLabel] = useState('');
   const [newTagColor, setNewTagColor] = useState('#6366f1');
 
@@ -1160,15 +1244,22 @@ function TagManager({ isOpen, onClose, tags, setTags, theme, stories, onUpdateSt
   };
 
   const handleDeleteTag = (tagId: string) => {
-    if (confirm('Are you sure you want to delete this tag? It will be removed from all documents.')) {
-      setTags(tags.filter((t: any) => t.id !== tagId));
-      // Remove tag from all stories
-      stories.forEach((story: any) => {
-        if (story.tags?.includes(tagId)) {
-          onUpdateStory(story.id, { tags: story.tags.filter((id: string) => id !== tagId) });
-        }
-      });
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Delete Tag',
+      message: 'Are you sure you want to delete this tag? It will be removed from all documents.',
+      confirmText: 'Delete Tag',
+      type: 'danger',
+      onConfirm: () => {
+        setTags(tags.filter((t: any) => t.id !== tagId));
+        // Remove tag from all stories
+        stories.forEach((story: any) => {
+          if (story.tags?.includes(tagId)) {
+            onUpdateStory(story.id, { tags: story.tags.filter((id: string) => id !== tagId) });
+          }
+        });
+      }
+    });
   };
 
   return (
@@ -1266,7 +1357,7 @@ function StatCard({ icon, label, value, color, theme }: any) {
   );
 }
 
-function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, setIsFocusMode, theme, toggleTheme, showLoading }: any) {
+function Editor({ user, story, stories, tags, onUpdate, onBack, showToast, isFocusMode, setIsFocusMode, theme, toggleTheme, showLoading }: any) {
   const editorRef = useRef<HTMLDivElement>(null);
   const focusEditorRef = useRef<HTMLDivElement>(null);
   const [showHistory, setShowHistory] = useState(false);
@@ -1275,7 +1366,6 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, set
   const [activeFormats, setActiveFormats] = useState<string[]>([]);
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportVersion, setExportVersion] = useState<StoryVersion | null>(null);
-  const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [showGoalModal, setShowGoalModal] = useState(false);
   const [sessionStartWordCount] = useState(story.wordCount);
@@ -1290,6 +1380,7 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, set
   const [aiResponse, setAiResponse] = useState('');
   const [newComment, setNewComment] = useState('');
   const [selectedTextForComment, setSelectedTextForComment] = useState('');
+  const [selectedIndianLang, setSelectedIndianLang] = useState('hi-IN');
 
   useEffect(() => {
     if (!user) return;
@@ -1363,6 +1454,49 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, set
     }
   };
 
+  const handleSarvamAction = async () => {
+    setAiLoading(true);
+    setAiResponse('');
+    
+    // Get text to translate: selection or first 1000 chars of content
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = story.content;
+    const plainText = tempDiv.innerText || tempDiv.textContent || '';
+    const textToTranslate = selectedTextForComment || plainText.slice(0, 1000);
+
+    if (!textToTranslate.trim()) {
+      setAiResponse('No text found to translate. Please write something or select text.');
+      setAiLoading(false);
+      return;
+    }
+    
+    try {
+      const response = await fetch('/api/sarvam/translate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          input: textToTranslate,
+          target_language_code: selectedIndianLang,
+        })
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Sarvam API error');
+      }
+
+      const data = await response.json();
+      setAiResponse(data.translated_text || 'No translation received.');
+    } catch (error: any) {
+      console.error(error);
+      setAiResponse(`Error: ${error.message || 'Failed to translate'}. Please ensure SARVAM_API_KEY is configured in the environment.`);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const insertAIResponse = () => {
     const newContent = story.content + `<br><br><div>${aiResponse}</div>`;
     const tempDiv = document.createElement('div');
@@ -1392,13 +1526,6 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, set
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
-
-  useEffect(() => {
-    if (toast) {
-      const timer = setTimeout(() => setToast(null), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [toast]);
 
   useEffect(() => {
     if (!user) return;
@@ -1461,9 +1588,10 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, set
     try {
       await setDoc(doc(db, `users/${user.uid}/stories/${story.id}/versions`, newVersion.id), newVersion);
       setVersions([newVersion, ...versions]);
+      showToast("Version saved successfully");
     } catch (error) {
       console.error("Error saving version:", error);
-      alert("Failed to save version.");
+      showToast("Failed to save version.", "error");
     }
   };
 
@@ -1754,6 +1882,33 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, set
                     <Lightbulb size={16} className="text-amber-500" />
                     Generate Ideas
                   </button>
+                </div>
+
+                <div className={`p-4 rounded-xl border space-y-4 ${theme === 'dark' ? 'bg-slate-800/50 border-slate-700' : 'bg-orange-50/50 border-orange-100'}`}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <Sparkles size={16} className="text-orange-500" />
+                    <span className={`text-xs font-bold uppercase tracking-wider ${theme === 'dark' ? 'text-slate-300' : 'text-slate-700'}`}>Indian Language Support</span>
+                  </div>
+                  <p className="text-[10px] text-slate-500">Translate selection or story to Indian languages using Sarvam AI.</p>
+                  
+                  <div className="flex flex-col gap-2">
+                    <select 
+                      value={selectedIndianLang}
+                      onChange={(e) => setSelectedIndianLang(e.target.value)}
+                      className={`w-full p-2 rounded-lg border text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 ${theme === 'dark' ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'}`}
+                    >
+                      {INDIAN_LANGUAGES.map(lang => (
+                        <option key={lang.code} value={lang.code}>{lang.name}</option>
+                      ))}
+                    </select>
+                    <button 
+                      onClick={handleSarvamAction}
+                      disabled={aiLoading}
+                      className="w-full py-2 bg-orange-600 text-white rounded-lg font-bold text-xs hover:bg-orange-500 transition-colors disabled:opacity-50"
+                    >
+                      Translate with Sarvam
+                    </button>
+                  </div>
                 </div>
 
                 {aiLoading && (
@@ -2283,5 +2438,39 @@ function Reader({ story, onBack, onEdit, theme, showLoading }: any) {
         </div>
       </div>
     </motion.div>
+  );
+}
+
+function ConfirmationModal({ isOpen, onClose, onConfirm, title, message, confirmText = 'Confirm', type = 'primary', theme }: any) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className={`w-full max-w-sm rounded-2xl shadow-2xl p-6 ${theme === 'dark' ? 'bg-slate-900 text-white' : 'bg-white text-slate-900'}`}
+      >
+        <h3 className="text-xl font-bold mb-4">{title}</h3>
+        <p className={`text-sm mb-8 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>{message}</p>
+        <div className="flex gap-3">
+          <button 
+            onClick={onClose}
+            className={`flex-1 py-3 rounded-xl font-bold transition-colors ${theme === 'dark' ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+          >
+            Cancel
+          </button>
+          <button 
+            onClick={() => {
+              onConfirm();
+              onClose();
+            }}
+            className={`flex-1 py-3 text-white rounded-xl font-bold transition-colors ${type === 'danger' ? 'bg-rose-600 hover:bg-rose-500' : 'bg-violet-600 hover:bg-violet-500'}`}
+          >
+            {confirmText}
+          </button>
+        </div>
+      </motion.div>
+    </div>
   );
 }

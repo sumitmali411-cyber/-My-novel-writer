@@ -12,7 +12,7 @@ export default defineConfig(({mode}) => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        injectRegister: 'inline',
+        injectRegister: false,
         includeAssets: ['app-icon-192.png', 'app-icon-512.png', 'app-screenshot-mobile.png', 'app-screenshot-desktop.png'],
         workbox: {
           maximumFileSizeToCacheInBytes: 4000000 // 4MB
@@ -30,7 +30,7 @@ export default defineConfig(({mode}) => {
           categories: ['productivity', 'utilities', 'education'],
           dir: 'ltr',
           lang: 'en-US',
-          display_override: ['window-controls-overlay', 'standalone', 'minimal-ui', 'tabbed'],
+          display_override: ['window-controls-overlay', 'standalone', 'minimal-ui'],
           launch_handler: {
             client_mode: 'focus-existing'
           },
@@ -61,9 +61,6 @@ export default defineConfig(({mode}) => {
           edge_side_panel: {
             preferred_width: 400
           },
-          note_taking: {
-            new_note_url: '/'
-          },
           prefer_related_applications: false,
           related_applications: [
             {
@@ -76,22 +73,6 @@ export default defineConfig(({mode}) => {
           scope_extensions: [
             {
               origin: '*.inkwell.app'
-            }
-          ],
-          widgets: [
-            {
-              name: 'Inkwell Note',
-              description: 'Quickly write a note',
-              tag: 'inkwell-note',
-              template_url: '/',
-              type: 'application/json',
-              icons: [
-                {
-                  src: 'https://placehold.co/192x192/8b5cf6/ffffff.png?text=IW',
-                  sizes: '192x192',
-                  type: 'image/png'
-                }
-              ]
             }
           ],
           icons: [
@@ -147,9 +128,7 @@ export default defineConfig(({mode}) => {
           ]
         },
         devOptions: {
-          enabled: true,
-          type: 'module',
-          navigateFallback: 'index.html',
+          enabled: false,
         }
       })
     ],
