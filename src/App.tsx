@@ -191,6 +191,11 @@ export default function App() {
     }
   };
 
+  const activeStoryIdRef = useRef(activeStoryId);
+  useEffect(() => {
+    activeStoryIdRef.current = activeStoryId;
+  }, [activeStoryId]);
+
   // Load from Firestore
   useEffect(() => {
     if (!isAuthReady || !user) {
@@ -222,7 +227,17 @@ export default function App() {
         // Listen to stories
         const storiesUnsubscribe = onSnapshot(collection(db, `users/${user.uid}/stories`), (snapshot) => {
           const loadedStories = snapshot.docs.map(doc => doc.data() as Story);
-          setStories(loadedStories);
+          setStories(prevStories => {
+            // Preserve local changes for the active story if it exists
+            const currentActiveId = activeStoryIdRef.current;
+            if (currentActiveId) {
+              const localActiveStory = prevStories.find(s => s.id === currentActiveId);
+              if (localActiveStory) {
+                return loadedStories.map(s => s.id === currentActiveId ? localActiveStory : s);
+              }
+            }
+            return loadedStories;
+          });
         });
 
         // Listen to projects
@@ -576,23 +591,27 @@ function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTa
   const handleBatchExport = (format: 'pdf' | 'md' | 'txt') => {
     const selectedStories = stories.filter((s: any) => selectedStoryIds.includes(s.id));
     selectedStories.forEach((story: any) => {
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = story.content;
+      const plainText = tempDiv.innerText || tempDiv.textContent || '';
+
       if (format === 'pdf') {
         const doc = new jsPDF();
         doc.setFontSize(20);
         doc.text(story.title, 20, 20);
         doc.setFontSize(12);
-        const splitText = doc.splitTextToSize(story.content, 170);
+        const splitText = doc.splitTextToSize(plainText, 170);
         doc.text(splitText, 20, 30);
         doc.save(`${story.title}.pdf`);
       } else if (format === 'md') {
-        const blob = new Blob([`# ${story.title}\n\n${story.content}`], { type: 'text/markdown' });
+        const blob = new Blob([`# ${story.title}\n\n${plainText}`], { type: 'text/markdown' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = `${story.title}.md`;
         a.click();
       } else {
-        const blob = new Blob([`${story.title}\n\n${story.content}`], { type: 'text/plain' });
+        const blob = new Blob([`${story.title}\n\n${plainText}`], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -929,7 +948,7 @@ function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTa
                 
                 <h3 className={`text-xl font-bold mb-2 line-clamp-1 ${theme === 'dark' ? 'text-slate-100' : 'text-slate-900'}`}>{story.title}</h3>
                 <p className={`text-sm line-clamp-2 mb-4 leading-relaxed ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
-                  {story.content || "No content yet. Start writing..."}
+                  {story.content ? story.content.replace(/<[^>]*>?/gm, '') : "No content yet. Start writing..."}
                 </p>
 
                 <div className="mt-auto flex flex-wrap gap-1.5">
@@ -1248,7 +1267,8 @@ function StatCard({ icon, label, value, color, theme }: any) {
 }
 
 function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, setIsFocusMode, theme, toggleTheme, showLoading }: any) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const focusEditorRef = useRef<HTMLDivElement>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [versions, setVersions] = useState<StoryVersion[]>([]);
   const [previewVersion, setPreviewVersion] = useState<StoryVersion | null>(null);
@@ -1272,32 +1292,40 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, set
   const [selectedTextForComment, setSelectedTextForComment] = useState('');
 
   useEffect(() => {
-    const savedComments = localStorage.getItem(`inkwell_comments_${story.id}`);
-    if (savedComments) {
-      try {
-        setComments(JSON.parse(savedComments));
-      } catch (e) {
-        console.error(e);
-      }
-    }
-  }, [story.id]);
+    if (!user) return;
+    const commentsRef = collection(db, `users/${user.uid}/stories/${story.id}/comments`);
+    const unsubscribe = onSnapshot(commentsRef, (snapshot) => {
+      const loadedComments = snapshot.docs.map(doc => doc.data() as any).sort((a: any, b: any) => b.timestamp - a.timestamp);
+      setComments(loadedComments);
+    });
+    return () => unsubscribe();
+  }, [story.id, user]);
 
-  useEffect(() => {
-    localStorage.setItem(`inkwell_comments_${story.id}`, JSON.stringify(comments));
-  }, [comments, story.id]);
-
-  const handleAddComment = () => {
-    if (!newComment.trim()) return;
+  const handleAddComment = async () => {
+    if (!newComment.trim() || !user) return;
     const comment = {
       id: Date.now().toString(),
       text: newComment.trim(),
-      author: 'You',
-      timestamp: new Date().toLocaleTimeString(),
+      author: user.displayName || user.email || 'You',
+      timestamp: Date.now(),
       quotedText: selectedTextForComment
     };
-    setComments([comment, ...comments]);
-    setNewComment('');
-    setSelectedTextForComment('');
+    try {
+      await setDoc(doc(db, `users/${user.uid}/stories/${story.id}/comments`, comment.id), comment);
+      setNewComment('');
+      setSelectedTextForComment('');
+    } catch (error) {
+      console.error("Error adding comment:", error);
+    }
+  };
+
+  const handleDeleteComment = async (commentId: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, `users/${user.uid}/stories/${story.id}/comments`, commentId));
+    } catch (error) {
+      console.error("Error deleting comment:", error);
+    }
   };
 
   const handleTextSelection = () => {
@@ -1336,7 +1364,12 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, set
   };
 
   const insertAIResponse = () => {
-    onUpdate({ content: story.content + '\n\n' + aiResponse, wordCount: (story.content + aiResponse).trim().split(/\s+/).length });
+    const newContent = story.content + `<br><br><div>${aiResponse}</div>`;
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = newContent;
+    const wordCount = (tempDiv.innerText || '').trim().split(/\s+/).length;
+    
+    onUpdate({ content: newContent, wordCount });
     setAiResponse('');
     setShowAIAssistant(false);
   };
@@ -1461,53 +1494,39 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, set
     setShowHistory(false);
   };
 
-  const applyFormat = (type: string) => {
-    if (!textareaRef.current) return;
-    const textarea = textareaRef.current;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const text = textarea.value;
-    const selectedText = text.substring(start, end);
-    
-    let formattedText = '';
-    let tag = '';
-    
-    switch (type) {
-      case 'bold': tag = '**'; break;
-      case 'italic': tag = '*'; break;
-      case 'underline': tag = '<u>'; break;
+  const lastSentContent = useRef(story.content);
+
+  const applyFormat = (command: string, value?: string) => {
+    document.execCommand(command, false, value);
+    const activeRef = isFocusMode ? focusEditorRef.current : editorRef.current;
+    if (activeRef) {
+      activeRef.focus();
+      handleContentChange();
     }
-
-    if (type === 'underline') {
-      formattedText = `<u>${selectedText}</u>`;
-    } else {
-      formattedText = `${tag}${selectedText}${tag}`;
-    }
-
-    const newContent = text.substring(0, start) + formattedText + text.substring(end);
-    
-    // Toggle active state
-    setActiveFormats(prev => 
-      prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]
-    );
-
-    onUpdate({ content: newContent, wordCount: newContent.trim() ? newContent.trim().split(/\s+/).length : 0, lastEdited: 'Just now' });
-    
-    // Restore focus and selection
-    setTimeout(() => {
-      textarea.focus();
-      textarea.setSelectionRange(start + tag.length, end + tag.length);
-    }, 0);
   };
 
-  const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const content = e.target.value;
-    const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
+  const handleContentChange = () => {
+    const activeRef = isFocusMode ? focusEditorRef.current : editorRef.current;
+    if (!activeRef) return;
+    const content = activeRef.innerHTML;
+    lastSentContent.current = content;
+    const textContent = activeRef.innerText || '';
+    const wordCount = textContent.trim() ? textContent.trim().split(/\s+/).length : 0;
     onUpdate({ content, wordCount, lastEdited: 'Just now' });
   };
 
   const displayTitle = previewVersion ? previewVersion.title : story.title;
   const displayContent = previewVersion ? previewVersion.content : story.content;
+
+  useEffect(() => {
+    const activeRef = isFocusMode ? focusEditorRef.current : editorRef.current;
+    if (activeRef && displayContent !== lastSentContent.current) {
+      if (activeRef.innerHTML !== displayContent) {
+        activeRef.innerHTML = displayContent || '';
+        lastSentContent.current = displayContent || '';
+      }
+    }
+  }, [displayContent, isFocusMode]);
 
   if (isFocusMode) {
     return (
@@ -1534,13 +1553,13 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, set
             className={`w-full bg-transparent text-4xl font-serif font-bold mb-8 focus:outline-none placeholder-slate-700 ${theme === 'dark' ? 'text-slate-100' : 'text-slate-900'}`}
             placeholder="Story Title"
           />
-          <textarea
-            ref={textareaRef}
-            value={displayContent}
-            onChange={handleContentChange}
-            readOnly={!!previewVersion}
-            className={`w-full h-[70vh] bg-transparent text-xl font-serif leading-relaxed resize-none focus:outline-none placeholder-slate-700 ${theme === 'dark' ? 'text-slate-300' : 'text-slate-600'}`}
-            placeholder="Start writing..."
+          <div
+            ref={focusEditorRef}
+            contentEditable={!previewVersion}
+            onInput={handleContentChange}
+            onMouseUp={handleTextSelection}
+            className={`w-full min-h-[70vh] bg-transparent text-xl font-serif leading-relaxed focus:outline-none ${theme === 'dark' ? 'text-slate-300' : 'text-slate-600'}`}
+            data-placeholder="Start writing..."
           />
         </div>
       </motion.div>
@@ -1576,27 +1595,24 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, set
           <ToolbarButton 
             icon={<Bold size={18} />} 
             theme={theme} 
-            active={activeFormats.includes('bold')}
             onClick={() => applyFormat('bold')}
           />
           <ToolbarButton 
             icon={<Italic size={18} />} 
             theme={theme} 
-            active={activeFormats.includes('italic')}
             onClick={() => applyFormat('italic')}
           />
           <ToolbarButton 
             icon={<Underline size={18} />} 
             theme={theme} 
-            active={activeFormats.includes('underline')}
             onClick={() => applyFormat('underline')}
           />
           <div className={`w-px h-5 mx-1 ${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-200'}`}></div>
-          <ToolbarButton icon={<AlignLeft size={18} />} active theme={theme} />
-          <ToolbarButton icon={<AlignCenter size={18} />} theme={theme} />
-          <ToolbarButton icon={<AlignRight size={18} />} theme={theme} />
+          <ToolbarButton icon={<AlignLeft size={18} />} theme={theme} onClick={() => applyFormat('justifyLeft')} />
+          <ToolbarButton icon={<AlignCenter size={18} />} theme={theme} onClick={() => applyFormat('justifyCenter')} />
+          <ToolbarButton icon={<AlignRight size={18} />} theme={theme} onClick={() => applyFormat('justifyRight')} />
           <div className={`w-px h-5 mx-1 ${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-200'}`}></div>
-          <ToolbarButton icon={<List size={18} />} theme={theme} />
+          <ToolbarButton icon={<List size={18} />} theme={theme} onClick={() => applyFormat('insertUnorderedList')} />
         </div>
 
         <div className="flex items-center gap-2">
@@ -1686,14 +1702,13 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, set
         {/* Main Pane */}
         <div className={`flex flex-col overflow-hidden ${isSplitPane ? 'flex-1 border-r' : 'w-full'} ${theme === 'dark' ? 'border-slate-800' : 'border-slate-200'}`}>
           <div className="max-w-3xl mx-auto w-full py-12 px-8 overflow-y-auto">
-            <textarea
-              ref={textareaRef}
-              value={displayContent}
-              onChange={handleContentChange}
+            <div
+              ref={editorRef}
+              contentEditable={!previewVersion}
+              onInput={handleContentChange}
               onMouseUp={handleTextSelection}
-              readOnly={!!previewVersion}
-              className={`w-full min-h-[70vh] bg-transparent text-lg font-serif leading-loose resize-none focus:outline-none placeholder-slate-300 transition-colors ${theme === 'dark' ? 'text-slate-300' : 'text-slate-800'}`}
-              placeholder="Once upon a time..."
+              className={`w-full min-h-[70vh] bg-transparent text-lg font-serif leading-loose focus:outline-none transition-colors ${theme === 'dark' ? 'text-slate-300' : 'text-slate-800'}`}
+              data-placeholder="Once upon a time..."
             />
           </div>
         </div>
@@ -1750,9 +1765,10 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, set
 
                 {aiResponse && !aiLoading && (
                   <div className="space-y-4">
-                    <div className={`p-4 rounded-2xl border text-sm leading-relaxed ${theme === 'dark' ? 'bg-slate-800/50 border-slate-700 text-slate-300' : 'bg-violet-50 border-violet-100 text-slate-700'}`}>
-                      {aiResponse}
-                    </div>
+                    <div 
+                      className={`p-4 rounded-2xl border text-sm leading-relaxed prose prose-sm max-w-none dark:prose-invert ${theme === 'dark' ? 'bg-slate-800/50 border-slate-700 text-slate-300' : 'bg-violet-50 border-violet-100 text-slate-700'}`}
+                      dangerouslySetInnerHTML={{ __html: aiResponse }}
+                    />
                     <div className="flex gap-2">
                       <button 
                         onClick={insertAIResponse}
@@ -1832,7 +1848,7 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, set
                         )}
                         <p className={`text-sm ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>{comment.text}</p>
                         <button 
-                          onClick={() => setComments(comments.filter(c => c.id !== comment.id))}
+                          onClick={() => handleDeleteComment(comment.id)}
                           className="text-[10px] text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity"
                         >
                           Delete
@@ -1868,9 +1884,10 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, isFocusMode, set
               {secondStory ? (
                 <>
                   <h2 className={`text-2xl font-bold mb-6 ${theme === 'dark' ? 'text-slate-100' : 'text-slate-900'}`}>{secondStory.title}</h2>
-                  <div className={`whitespace-pre-wrap text-lg leading-relaxed font-serif ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>
-                    {secondStory.content}
-                  </div>
+                  <div 
+                    className={`text-lg leading-relaxed font-serif ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}
+                    dangerouslySetInnerHTML={{ __html: secondStory.content }}
+                  />
                 </>
               ) : (
                 <div className="h-full flex flex-col items-center justify-center text-slate-400 gap-4">
@@ -2259,11 +2276,10 @@ function Reader({ story, onBack, onEdit, theme, showLoading }: any) {
           <div className="w-16 h-1 bg-violet-600 mx-auto mb-16"></div>
           
           <div 
-            className={`max-w-none whitespace-pre-wrap ${fontFamily}`}
+            className={`max-w-none ${fontFamily}`}
             style={{ fontSize: `${fontSize}px`, lineHeight: lineHeight }}
-          >
-            {story.content || "This document is empty."}
-          </div>
+            dangerouslySetInnerHTML={{ __html: story.content || "This document is empty." }}
+          />
         </div>
       </div>
     </motion.div>
