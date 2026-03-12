@@ -56,7 +56,7 @@ import { auth, db } from './firebase';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 // Types
-type StoryType = 'Short Story' | 'Novel' | 'Idea';
+type StoryType = 'Short Story' | 'Idea';
 
 interface Project {
   id: string;
@@ -99,7 +99,7 @@ const initialStories: Story[] = [
   {
     id: '1',
     title: 'The Neon City',
-    type: 'Novel',
+    type: 'Short Story',
     content: 'The rain fell in sheets, reflecting the neon signs of the city below. Cybernetic enhancements hummed softly in the damp air as Kael adjusted his collar. He had a job to do, and the target was somewhere in the underbelly of Sector 4.',
     wordCount: 12450,
     lastEdited: '2 hours ago',
@@ -326,8 +326,7 @@ export default function App() {
       content: '',
       wordCount: 0,
       lastEdited: 'Just now',
-      color: type === 'Novel' ? 'from-fuchsia-500 to-pink-500' : 
-             type === 'Short Story' ? 'from-violet-500 to-purple-500' : 
+      color: type === 'Short Story' ? 'from-violet-500 to-purple-500' : 
              'from-amber-400 to-orange-500',
       tags: []
     };
@@ -394,7 +393,7 @@ export default function App() {
       const newStory: Story = {
         id: Date.now().toString(),
         title: fileName.replace(/\.[^/.]+$/, ""),
-        type: wordCount > 5000 ? 'Novel' : 'Short Story',
+        type: 'Short Story',
         content,
         wordCount,
         lastEdited: 'Just now',
@@ -590,7 +589,6 @@ function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTa
   const [showExportModal, setShowExportModal] = useState(false);
 
   const totalWords = stories.reduce((acc: number, s: any) => acc + s.wordCount, 0);
-  const novelsCount = stories.filter((s: any) => s.type === 'Novel').length;
   const shortStoriesCount = stories.filter((s: any) => s.type === 'Short Story').length;
   const ideasCount = stories.filter((s: any) => s.type === 'Idea').length;
 
@@ -640,6 +638,27 @@ function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTa
       console.error("Error creating project:", error);
       showToast("Failed to create project.", "error");
     }
+  };
+
+  const handleDeleteProject = (projectId: string, projectTitle: string) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Delete Project',
+      message: `Are you sure you want to delete "${projectTitle}"? This will NOT delete the stories within it, but they will no longer be associated with this project.`,
+      confirmText: 'Delete Project',
+      type: 'danger',
+      onConfirm: async () => {
+        if (!user) return;
+        try {
+          await deleteDoc(doc(db, `users/${user.uid}/projects`, projectId));
+          if (activeProjectId === projectId) setActiveProjectId(null);
+          showToast("Project deleted successfully");
+        } catch (error) {
+          console.error("Error deleting project:", error);
+          showToast("Failed to delete project.", "error");
+        }
+      }
+    });
   };
 
   const activeProject = projects.find((p: any) => p.id === activeProjectId);
@@ -745,17 +764,16 @@ function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTa
           <button onClick={() => onCreate('Short Story')} className={`p-2 rounded-full transition-colors ${theme === 'dark' ? 'bg-violet-900/30 text-violet-400 hover:bg-violet-900/50' : 'bg-violet-100 text-violet-600 hover:bg-violet-200'}`} title="New Short Story">
             <PenTool size={20} />
           </button>
-          <button onClick={() => onCreate('Novel')} className="flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white font-semibold hover:shadow-lg hover:shadow-fuchsia-500/30 transition-all">
+          <button onClick={() => onCreate('Short Story')} className="flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white font-semibold hover:shadow-lg hover:shadow-fuchsia-500/30 transition-all">
             <Plus size={20} />
-            <span className="hidden sm:inline">New Novel</span>
+            <span className="hidden sm:inline">New Story</span>
           </button>
         </div>
       </header>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-10">
         <StatCard icon={<FileText />} label="Total Words" value={totalWords.toLocaleString()} color={theme === 'dark' ? "bg-blue-900/20 text-blue-400" : "bg-blue-50 text-blue-600"} theme={theme} />
-        <StatCard icon={<BookOpen />} label="Novels" value={novelsCount} color={theme === 'dark' ? "bg-fuchsia-900/20 text-fuchsia-400" : "bg-fuchsia-50 text-fuchsia-600"} theme={theme} />
         <StatCard icon={<PenTool />} label="Short Stories" value={shortStoriesCount} color={theme === 'dark' ? "bg-violet-900/20 text-violet-400" : "bg-violet-50 text-violet-600"} theme={theme} />
         <StatCard icon={<Lightbulb />} label="Ideas" value={ideasCount} color={theme === 'dark' ? "bg-amber-900/20 text-amber-400" : "bg-amber-50 text-amber-600"} theme={theme} />
       </div>
@@ -784,15 +802,26 @@ function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTa
             const projectStories = stories.filter((s: any) => s.projectId === project.id);
             const projectWords = projectStories.reduce((acc: number, s: any) => acc + s.wordCount, 0);
             return (
-              <button 
-                key={project.id}
-                onClick={() => setActiveProjectId(project.id)}
-                className={`flex-shrink-0 px-6 py-4 rounded-2xl border-2 transition-all flex flex-col gap-1 min-w-[160px] text-left relative overflow-hidden ${activeProjectId === project.id ? 'border-violet-500 bg-violet-500/10 text-violet-600' : theme === 'dark' ? 'border-slate-800 bg-slate-900 text-slate-400' : 'border-slate-100 bg-white text-slate-500'}`}
-              >
-                <div className={`absolute top-0 left-0 w-full h-1 bg-gradient-to-r ${project.color}`}></div>
-                <span className="text-lg font-bold line-clamp-1">{project.title}</span>
-                <span className="text-[10px] uppercase tracking-widest opacity-60">{projectStories.length} scenes • {projectWords.toLocaleString()} words</span>
-              </button>
+              <div key={project.id} className="relative group">
+                <button 
+                  onClick={() => setActiveProjectId(project.id)}
+                  className={`flex-shrink-0 px-6 py-4 rounded-2xl border-2 transition-all flex flex-col gap-1 min-w-[160px] text-left relative overflow-hidden ${activeProjectId === project.id ? 'border-violet-500 bg-violet-500/10 text-violet-600' : theme === 'dark' ? 'border-slate-800 bg-slate-900 text-slate-400' : 'border-slate-100 bg-white text-slate-500'}`}
+                >
+                  <div className={`absolute top-0 left-0 w-full h-1 bg-gradient-to-r ${project.color}`}></div>
+                  <span className="text-lg font-bold line-clamp-1">{project.title}</span>
+                  <span className="text-[10px] uppercase tracking-widest opacity-60">{projectStories.length} scenes • {projectWords.toLocaleString()} words</span>
+                </button>
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteProject(project.id, project.title);
+                  }}
+                  className={`absolute -top-2 -right-2 p-1.5 rounded-full bg-rose-500 text-white opacity-0 group-hover:opacity-100 transition-opacity shadow-lg z-10`}
+                  title="Delete Project"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
             );
           })}
         </div>
@@ -852,7 +881,7 @@ function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTa
                   <div>
                     <label className="text-[10px] font-bold text-slate-500 uppercase mb-4 block tracking-widest">Story Type</label>
                     <div className="flex flex-wrap gap-2">
-                      {(['Novel', 'Short Story', 'Idea'] as StoryType[]).map(type => (
+                      {(['Short Story', 'Idea'] as StoryType[]).map(type => (
                         <button 
                           key={type}
                           onClick={() => setSelectedTypes(prev => prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type])}
@@ -1031,7 +1060,7 @@ function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTa
                 
                 <h3 className={`text-xl font-bold mb-2 line-clamp-1 ${theme === 'dark' ? 'text-slate-100' : 'text-slate-900'}`}>{story.title}</h3>
                 <p className={`text-sm line-clamp-2 mb-4 leading-relaxed ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
-                  {story.content ? story.content.replace(/<[^>]*>?/gm, '') : "No content yet. Start writing..."}
+                  {story.content ? story.content.replace(/<[^>]*>?/gm, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'") : "No content yet. Start writing..."}
                 </p>
 
                 <div className="mt-auto flex flex-wrap gap-1.5">
@@ -1093,7 +1122,7 @@ function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTa
                   <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Project Title</label>
                   <input 
                     type="text" 
-                    placeholder="e.g. Cyberpunk Novel"
+                    placeholder="e.g. Cyberpunk Story"
                     value={newProjectTitle}
                     onChange={(e) => setNewProjectTitle(e.target.value)}
                     className={`w-full px-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-violet-500 ${theme === 'dark' ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'}`}
@@ -1381,6 +1410,7 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, showToast, isFoc
   const [newComment, setNewComment] = useState('');
   const [selectedTextForComment, setSelectedTextForComment] = useState('');
   const [selectedIndianLang, setSelectedIndianLang] = useState('hi-IN');
+  const [selectionMenu, setSelectionMenu] = useState<{ x: number, y: number, show: boolean }>({ x: 0, y: 0, show: false });
 
   useEffect(() => {
     if (!user) return;
@@ -1398,6 +1428,7 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, showToast, isFoc
       id: Date.now().toString(),
       text: newComment.trim(),
       author: user.displayName || user.email || 'You',
+      authorId: user.uid,
       timestamp: Date.now(),
       quotedText: selectedTextForComment
     };
@@ -1405,6 +1436,7 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, showToast, isFoc
       await setDoc(doc(db, `users/${user.uid}/stories/${story.id}/comments`, comment.id), comment);
       setNewComment('');
       setSelectedTextForComment('');
+      setSelectionMenu({ ...selectionMenu, show: false });
     } catch (error) {
       console.error("Error adding comment:", error);
     }
@@ -1422,7 +1454,16 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, showToast, isFoc
   const handleTextSelection = () => {
     const selection = window.getSelection();
     if (selection && selection.toString().trim()) {
+      const range = selection.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
       setSelectedTextForComment(selection.toString().trim());
+      setSelectionMenu({
+        x: rect.left + rect.width / 2,
+        y: rect.top + window.scrollY - 40,
+        show: true
+      });
+    } else {
+      setSelectionMenu({ ...selectionMenu, show: false });
     }
   };
 
@@ -1622,7 +1663,7 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, showToast, isFoc
     setShowHistory(false);
   };
 
-  const lastSentContent = useRef(story.content);
+  const lastSentContent = useRef<string | null>(null);
 
   const applyFormat = (command: string, value?: string) => {
     document.execCommand(command, false, value);
@@ -1839,6 +1880,47 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, showToast, isFoc
               data-placeholder="Once upon a time..."
             />
           </div>
+
+          {/* Floating Selection Menu */}
+          <AnimatePresence>
+            {selectionMenu.show && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 10 }}
+                style={{ 
+                  position: 'absolute', 
+                  left: selectionMenu.x, 
+                  top: selectionMenu.y,
+                  transform: 'translateX(-50%)',
+                  zIndex: 50
+                }}
+                className={`flex items-center gap-1 p-1 rounded-xl border shadow-xl ${theme === 'dark' ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}
+              >
+                <button 
+                  onClick={() => {
+                    setShowComments(true);
+                    setSelectionMenu({ ...selectionMenu, show: false });
+                  }}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${theme === 'dark' ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-100'}`}
+                >
+                  <MessageSquare size={14} className="text-violet-500" />
+                  Comment
+                </button>
+                <div className={`w-px h-4 ${theme === 'dark' ? 'bg-slate-700' : 'bg-slate-200'}`}></div>
+                <button 
+                  onClick={() => {
+                    setShowAIAssistant(true);
+                    setSelectionMenu({ ...selectionMenu, show: false });
+                  }}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${theme === 'dark' ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-100'}`}
+                >
+                  <Sparkles size={14} className="text-blue-500" />
+                  AI Rewrite
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* AI Assistant Sidebar */}
@@ -1994,7 +2076,7 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, showToast, isFoc
                       <div key={comment.id} className="space-y-2 group">
                         <div className="flex justify-between items-center">
                           <span className={`text-xs font-bold ${theme === 'dark' ? 'text-slate-300' : 'text-slate-900'}`}>{comment.author}</span>
-                          <span className="text-[10px] text-slate-400">{comment.timestamp}</span>
+                          <span className="text-[10px] text-slate-400">{new Date(comment.timestamp).toLocaleDateString()}</span>
                         </div>
                         {comment.quotedText && (
                           <div className={`p-2 rounded-lg border-l-2 border-violet-400 text-[10px] italic ${theme === 'dark' ? 'bg-slate-800/50 text-slate-500' : 'bg-slate-50 text-slate-500'}`}>
@@ -2002,12 +2084,14 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, showToast, isFoc
                           </div>
                         )}
                         <p className={`text-sm ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>{comment.text}</p>
-                        <button 
-                          onClick={() => handleDeleteComment(comment.id)}
-                          className="text-[10px] text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
-                          Delete
-                        </button>
+                        {comment.authorId === user.uid && (
+                          <button 
+                            onClick={() => handleDeleteComment(comment.id)}
+                            className="text-[10px] text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            Delete
+                          </button>
+                        )}
                       </div>
                     ))
                   )}
