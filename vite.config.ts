@@ -132,9 +132,9 @@ export default defineConfig(({mode}) => {
         }
       })
     ],
-    define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-    },
+    // NOTE: never `define` GEMINI_API_KEY here. Anything defined at build time
+    // is inlined into the client bundle and readable by every visitor. The key
+    // is used only by the Express server in server.ts.
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

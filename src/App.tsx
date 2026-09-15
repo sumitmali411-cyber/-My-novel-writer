@@ -46,7 +46,15 @@ import * as mammoth from 'mammoth';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import { jsPDF } from 'jspdf';
-import { GoogleGenAI } from "@google/genai";
+import DOMPurify from "dompurify";
+
+/**
+ * Story content and AI output are rendered as HTML. Sanitize before it reaches
+ * dangerouslySetInnerHTML or innerHTML so injected markup cannot execute.
+ */
+function sanitizeHtml(dirty: string): string {
+  return DOMPurify.sanitize(dirty ?? "", { USE_PROFILES: { html: true } });
+}
 
 import { signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { collection, doc, setDoc, getDoc, getDocs, onSnapshot, query, where, deleteDoc } from 'firebase/firestore';
@@ -694,7 +702,7 @@ function Dashboard({ user, onLogout, stories, projects, setProjects, tags, setTa
     const selectedStories = stories.filter((s: any) => selectedStoryIds.includes(s.id));
     selectedStories.forEach((story: any) => {
       const tempDiv = document.createElement('div');
-      tempDiv.innerHTML = story.content;
+      tempDiv.innerHTML = sanitizeHtml(story.content);
       const plainText = tempDiv.innerText || tempDiv.textContent || '';
 
       if (format === 'pdf') {
@@ -1481,12 +1489,19 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, showToast, isFoc
     }
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
+      // The Gemini key stays on the server; this goes through the proxy.
+      const response = await fetch('/api/gemini/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
       });
-      setAiResponse(response.text || 'No response from AI.');
+
+      if (!response.ok) {
+        throw new Error(`Generation failed with status ${response.status}`);
+      }
+
+      const data = await response.json();
+      setAiResponse(data.text || 'No response from AI.');
     } catch (error) {
       console.error(error);
       setAiResponse('Error generating content. Please try again.');
@@ -1501,7 +1516,7 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, showToast, isFoc
     
     // Get text to translate: selection or first 1000 chars of content
     const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = story.content;
+    tempDiv.innerHTML = sanitizeHtml(story.content);
     const plainText = tempDiv.innerText || tempDiv.textContent || '';
     const textToTranslate = selectedTextForComment || plainText.slice(0, 1000);
 
@@ -1539,9 +1554,9 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, showToast, isFoc
   };
 
   const insertAIResponse = () => {
-    const newContent = story.content + `<br><br><div>${aiResponse}</div>`;
+    const newContent = story.content + `<br><br><div>${sanitizeHtml(aiResponse)}</div>`;
     const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = newContent;
+    tempDiv.innerHTML = sanitizeHtml(newContent);
     const wordCount = (tempDiv.innerText || '').trim().split(/\s+/).length;
     
     onUpdate({ content: newContent, wordCount });
@@ -1691,7 +1706,7 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, showToast, isFoc
     const activeRef = isFocusMode ? focusEditorRef.current : editorRef.current;
     if (activeRef && displayContent !== lastSentContent.current) {
       if (activeRef.innerHTML !== displayContent) {
-        activeRef.innerHTML = displayContent || '';
+        activeRef.innerHTML = sanitizeHtml(displayContent || '');
         lastSentContent.current = displayContent || '';
       }
     }
@@ -2004,7 +2019,7 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, showToast, isFoc
                   <div className="space-y-4">
                     <div 
                       className={`p-4 rounded-2xl border text-sm leading-relaxed prose prose-sm max-w-none dark:prose-invert ${theme === 'dark' ? 'bg-slate-800/50 border-slate-700 text-slate-300' : 'bg-violet-50 border-violet-100 text-slate-700'}`}
-                      dangerouslySetInnerHTML={{ __html: aiResponse }}
+                      dangerouslySetInnerHTML={{ __html: sanitizeHtml(aiResponse) }}
                     />
                     <div className="flex gap-2">
                       <button 
@@ -2125,7 +2140,7 @@ function Editor({ user, story, stories, tags, onUpdate, onBack, showToast, isFoc
                   <h2 className={`text-2xl font-bold mb-6 ${theme === 'dark' ? 'text-slate-100' : 'text-slate-900'}`}>{secondStory.title}</h2>
                   <div 
                     className={`text-lg leading-relaxed font-serif ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}
-                    dangerouslySetInnerHTML={{ __html: secondStory.content }}
+                    dangerouslySetInnerHTML={{ __html: sanitizeHtml(secondStory.content) }}
                   />
                 </>
               ) : (
@@ -2517,7 +2532,7 @@ function Reader({ story, onBack, onEdit, theme, showLoading }: any) {
           <div 
             className={`max-w-none ${fontFamily}`}
             style={{ fontSize: `${fontSize}px`, lineHeight: lineHeight }}
-            dangerouslySetInnerHTML={{ __html: story.content || "This document is empty." }}
+            dangerouslySetInnerHTML={{ __html: sanitizeHtml(story.content || "This document is empty.") }}
           />
         </div>
       </div>
